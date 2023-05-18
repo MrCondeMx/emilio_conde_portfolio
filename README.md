@@ -1,4 +1,4 @@
-# Emilio Conde Data Analytics Portfolio
+# Emilio Conde Data Science Portfolio
 
 # [Predicting Startups Success](https://github.com/MrCondeMx/emilio_portfolio/tree/main/Founder-Analysis)
 *Note: The output is in an HTML file. For accurate visualization, please download the file.*
