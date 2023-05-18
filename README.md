@@ -1,6 +1,7 @@
 # Emilio Conde Portfolio
 
 # [Project 1: Predicting Startups Success](Founder-Analysis)
+*Note: The output is in an HTML file. For accurate visualization, please download the file.*
 
 This project examines the key differences between businesses started by one person and those started by a team of co-founders. The goal is to figure out what makes a company successful and what might cause it to close or face acquisition. 
 
@@ -20,7 +21,7 @@ This project examines the key differences between businesses started by one pers
 ![](Founder-Analysis/Images/AUC.jpg)
 
 ### Predictions on real world data:
-![](Founder-Analysis/Images/Predictions.png)
+![](Founder-Analysis/Images/predictions.png)
 
 
 # Project 2: LinkedIn Company Demographics Scrapper
