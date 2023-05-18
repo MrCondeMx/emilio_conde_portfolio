@@ -10,6 +10,18 @@ This project examines the key differences between businesses started by one pers
 * 90%+ accuracy across both training and testing datasets.
 * Predictions were made on data from real companies
 
+### Time to move across rounds:
+![](Founder-Analysis/Images/RoundTimeframe.jpeg)
+
+### Correlation between experience years as entrepreneurs vs. funding rounds:
+![](Founder-Analysis/Images/EntrepAgevsFundRounds.jpeg)
+
+### Area Under the Curve for logistic regression model:
+![](Founder-Analysis/Images/AUC.jpg)
+
+### Predictions on real world data:
+![](Founder-Analysis/Images/Predictions.png)
+
 
 # Project 2: LinkedIn Company Demographics Scrapper
 
