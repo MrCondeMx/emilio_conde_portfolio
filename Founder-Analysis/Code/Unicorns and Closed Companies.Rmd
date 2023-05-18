@@ -1,0 +1,1313 @@
+---
+title: "Successful Companies vs Closed and Acquired: Data Analysis and Logistic regression model"
+author: "Emilio Conde"
+date: "2023-05-13"
+output: html_document
+---
+```{css, include = FALSE}
+.center {
+  margin: auto;
+  text-align: center;
+}
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Preamble:
+#### This report presents an in-depth analysis of venture capital investments in Latin American startups, with the goal of identifying key characteristics that distinguish successful companies from those that fail. 
+#### The analysis is carried out in two stages: the first stage involves an exploratory data study of various Latin American startups across numerous metrics, while the second stage focuses on the development of a Logistic Regression model designed to predict the probability of a company's success or failure.
+
+<br> <br>
+
+> For the purpose of this analysis, we define success in the following way: <br> <br>
+Successful companies are those that have secured at least one funding round exceeding 20 million dollars. <br> <br>
+In contrast, unsuccessful companies are identified as those that have either shut down or have been acquired as a means of survival.
+
+
+```{r Libraries, message=FALSE, warning=FALSE}
+# Libraries to use. We load them quietly
+packages <- c("tidyverse", "googlesheets4", "glmnet", "caret", "ggthemes", "ggpubr", "stargazer",
+              "psych","summarytools","kableExtra","scales","reshape2","car", "forcats", "caTools",
+              "tidymodels","pROC", "ModelMetrics","oddsratio","epiDisplay","gridExtra")
+
+invisible(lapply(packages, function(x) {
+  suppressPackageStartupMessages(library(x, character.only = TRUE, quietly = TRUE))}))
+```
+
+
+```{r Data Loading, include=FALSE}
+sheet_invest_url <- "https://docs.google.com/spreadsheets/d/1hoSQH9DM1W8Cy8SYmyvpXvBkrp5zxcP_bqHdVYcBMGE/edit#gid=592233216"
+sheet_invest <- gs4_get(sheet_invest_url)
+sheet_name_invest <- "VC Investments for Model (All Data)"
+sheet_data_invest <- sheet_invest %>% range_read(sheet = sheet_name_invest)
+
+sheet_companies_url <- "https://docs.google.com/spreadsheets/d/1hoSQH9DM1W8Cy8SYmyvpXvBkrp5zxcP_bqHdVYcBMGE/edit#gid=895211516"
+sheet_companies <- gs4_get(sheet_companies_url)
+sheet_name_companies <- "Companies by success status"
+sheet_data_companies <- sheet_companies %>% range_read(sheet = sheet_name_companies) %>% 
+  dplyr::select(company, cofounders)
+
+sheet_scraper_url <- "https://docs.google.com/spreadsheets/d/1-5pbXS1AJ0-B76Gl1t2_IPfqgJZH4cu9TwblvNYSIDA/edit#gid=318525909"
+sheet_scraper <- gs4_get (sheet_scraper_url)
+sheet_name_scraper <- "Segmentación Final"
+sheet_data_scraper <- sheet_scraper %>% range_read(sheet= sheet_name_scraper)
+
+```
+
+#### The data for this analysis is sourced from the Pitchbook platform. Now, let's begin by processing the raw dataset.
+```{r Classificating companies, warning=FALSE, message=FALSE}
+raw_data_vc  <- sheet_data_invest %>%
+  #Rename Variables
+  rename(company= "Company",
+         vertical= "Vertical General",
+         status = "Status",
+         hq = "HQ Company",
+         deal_type = "Deal Type",
+         team_composition = "Composición del equipo",
+         founding_year ="Founding year (company)",
+         funding_year = "Funding Year",
+         funding_usd = "USD",
+         employees = "Employees",
+         total_raised= "Total Raised",
+         funding_date = "Funding Date",
+         n_investors = "Number of investors",
+         clasf_unicorn= `New clasf unicorn`,
+         exit_date = `Exit year`,
+         team = `Composición del equipo`,
+         hq_inv = `Headquarters of Lead Investor`) %>% 
+  # Group by company name
+  group_by(company) %>%
+  # Mutate different variables. Here I'm correcting some data capture errors.
+  mutate(funding_date = as.Date(funding_date, format = "%Y-%m-%d"),
+         founding_year =as.Date(paste(founding_year, "-01-01", sep = ""), format = "%Y-%m-%d"),
+         exit_date =as.Date(paste(exit_date, "-01-01", sep = ""), format = "%Y-%m-%d"),
+         end_date = as.Date(ifelse(status == "Closed", as.character(max(funding_date)),
+                                   ifelse(status == "Acquired", as.character(exit_date), NA)), format = "%Y-%m-%d"),
+         vertical = ifelse(vertical %in% c("Insurtech", "InsurTech"), "Insurtech", vertical),
+         deal_type = ifelse(deal_type %in% c("Line of Credit", "Line of credit"), "Line of credit", deal_type),
+         team = factor(ifelse(team %in% c("Equipo femenino", "Equipo Femenino"), "Equipo femenino", 
+                              ifelse(team %in% c("Equipo Mixto","Equipo mixto"),"Equipo mixto",team)),
+                       levels = c("Equipo femenino","Equipo masculino","Equipo mixto",
+                                  "Un solo hombre","Una sola mujer")),
+         status = factor(ifelse(status %in% c("acquired", "Acquired"), "Acquired", status),
+                         levels = c("Acquired","Closed","Operating")),
+         clasf_unicorn = factor(ifelse(clasf_unicorn %in% c("Was acquired","Was Acquired"), "Was Acquired", clasf_unicorn),
+                                levels = c("IPO","Rest of Companies","Soonicorn","Unicorn","Was Acquired")),
+         # Calculate new variables based on existing ones. For example, get median funding by company
+         median_funding = median(funding_usd, na.rm= T),
+         total_investors = sum(n_investors),
+         funding_rounds = n(),
+         foreign_funding_all = if_else(hq_inv== hq,"No","Yes"),
+         foreign_funding_all = factor(foreign_funding_all,levels = c("No","Yes")),
+         foreign_funding = ifelse(
+           hq != hq_inv &
+             !(hq_inv %in% c("Argentina", "Brazil", "Chile", 
+                             "Colombia", "Ecuador", "Mexico", 
+                             "Peru", "Venezuela")),
+           "Yes",
+           "No"),
+         same_country_funding = ifelse(hq==hq_inv,"Yes","No"),
+         regional_funding = ifelse(hq %in% c("Argentina", "Brazil", "Chile", 
+                                             "Colombia", "Ecuador", "Mexico", 
+                                             "Peru", "Venezuela") &
+                                     hq_inv %in% c("Argentina", "Brazil", 
+                                                   "Chile", "Colombia", "Ecuador", 
+                                                   "Mexico", "Peru", "Venezuela"), "Yes", "No"),
+         # Here I'm manually correcting some data capture errors
+         first_funding_round = case_when(
+           company == "Brex" ~ as.Date("2019-04-16", format = "%Y-%m-%d"),
+           company == "Hackmetrix" ~ as.Date("2020-07-01", format = "%Y-%m-%d"),
+           company == "Hash (Financial Software)" ~ as.Date("2017-01-05", format = "%Y-%m-%d"),
+           company == "Inventa (B2B Marketplace)" ~ as.Date("2021-08-17", format = "%Y-%m-%d"),
+           company == "Kavak" ~ as.Date("2016-08-01", format = "%Y-%m-%d"),
+           company == "Nexu" ~ as.Date("2014-01-01", format = "%Y-%m-%d"),
+           company == "Solfacil" ~ as.Date("2018-01-01", format = "%Y-%m-%d"),
+           TRUE ~ min(funding_date)),
+         last_funding_round = case_when(
+           company == "Brex" ~ as.Date("2019-12-11", format = "%Y-%m-%d"),
+           company == "Hackmetrix" ~ as.Date("2021-11-28", format = "%Y-%m-%d"),
+           company == "Hash (Financial Software)" ~ as.Date("2021-10-20", format = "%Y-%m-%d"),
+           company == "Inventa (B2B Marketplace)" ~ as.Date("2022-01-23", format = "%Y-%m-%d"),
+           company == "Kavak" ~ as.Date("2022-09-20", format = "%Y-%m-%d"),
+           company == "Nexu" ~ as.Date("2022-01-26", format = "%Y-%m-%d"),
+           company == "Solfacil" ~ as.Date("2022-09-22", format = "%Y-%m-%d"),
+           TRUE ~ max(funding_date)),
+         months_to_first_round = as.numeric(round(difftime(first_funding_round,founding_year, units = "days"))/30, digits =1),
+         months_between_first_and_last_round = as.numeric(round(difftime(last_funding_round,
+                                                                         first_funding_round, units = "days"))/30, digits=1),
+         months_between_rounds = c(NA, diff(as.numeric(difftime(funding_date, lag(funding_date), units = "days"))/30)),
+         team = case_when(
+           team == "Equipo femenino" ~ "Co-Founder Team",
+           team == "Equipo masculino" ~ "Co-Founder Team",
+           team == "Equipo mixto" ~ "Co-Founder Team",
+           team == "Un solo hombre" ~ "Solo Founder",
+           team == "Una sola mujer" ~ "Solo Founder",
+           TRUE  ~ team),
+         team = factor(team,levels = c("Co-Founder Team","Solo Founder")),
+         avg_months_between_rounds = mean(months_between_rounds, na.rm = TRUE)) %>% 
+  # Filter out NAs and absurd variables, such as a company having 0 investors or negative total raised
+  filter(complete.cases(funding_usd,total_raised, n_investors, founding_year, employees, funding_date),
+         !grepl("Undisclosed - VC", deal_type),
+         n_investors >0,
+         total_raised >0,
+         as.numeric(format(founding_year, "%Y")) >= 2013) %>% 
+  # Company classification starts from this point.
+  # Companies classified as Unicorns or Soonicorns are considered to be those who have gotten a +20M USD Funding round
+  # I'm only considering companies that closed or were acquired from 2018 to beyond.
+  filter(clasf_unicorn%in% c("Unicorn","Soonicorn")|status%in% c("Closed","Acquired") 
+         &  as.numeric(format(end_date, "%Y")) >= 2018) %>% 
+  # Successful companies will be those with a Unicorn or Soonicorn status
+  # Not Successful companies will be those that were closed or acquired
+  mutate(success = ifelse(clasf_unicorn %in% c("Unicorn", "Soonicorn"), "Successful",
+                          ifelse(status%in% c("Closed","Acquired"),"Not successful",NA)),
+         success = ifelse(company %in% c("Auth0", "Checkars", "Cornershop","Daki"), "Successful", success),
+         success = factor(success,levels = c("Successful","Not successful"))) %>% 
+  dplyr::select(company,vertical, hq, hq_inv,success, founding_year,end_date,foreign_funding_all, same_country_funding,
+         median_funding, funding_usd,
+         regional_funding, employees, team, months_to_first_round,
+         months_between_first_and_last_round, avg_months_between_rounds, 
+         total_raised, funding_rounds, n_investors) %>% 
+  distinct(company, .keep_all = T)
+
+
+
+```
+
+```{r Classificating deals, warning=FALSE, message=FALSE, include=FALSE}
+raw_data_deals  <- sheet_data_invest %>%
+  #Rename Variables
+  rename(company= "Company",
+         vertical= "Vertical General",
+         status = "Status",
+         hq = "HQ Company",
+         deal_type = "Deal Type",
+         team_composition = "Composición del equipo",
+         founding_year ="Founding year (company)",
+         funding_year = "Funding Year",
+         funding_usd = "USD",
+         employees = "Employees",
+         total_raised= "Total Raised",
+         funding_date = "Funding Date",
+         n_investors = "Number of investors",
+         clasf_unicorn= `New clasf unicorn`,
+         exit_date = `Exit year`,
+         team = `Composición del equipo`,
+         hq_inv = `Headquarters of Lead Investor`) %>% 
+  # Group by company name
+  group_by(company) %>%
+  # Mutate different variables. Here I'm correcting some data capture errors.
+  mutate(funding_date = as.Date(funding_date, format = "%Y-%m-%d"),
+         founding_year =as.Date(paste(founding_year, "-01-01", sep = ""), format = "%Y-%m-%d"),
+         exit_date =as.Date(paste(exit_date, "-01-01", sep = ""), format = "%Y-%m-%d"),
+         end_date = as.Date(ifelse(status == "Closed", as.character(max(funding_date)),
+                                   ifelse(status == "Acquired", as.character(exit_date), NA)), format = "%Y-%m-%d"),
+         vertical = ifelse(vertical %in% c("Insurtech", "InsurTech"), "Insurtech", vertical),
+         deal_type = ifelse(deal_type %in% c("Line of Credit", "Line of credit"), "Line of credit", deal_type),
+         team = factor(ifelse(team %in% c("Equipo femenino", "Equipo Femenino"), "Equipo femenino", 
+                              ifelse(team %in% c("Equipo Mixto","Equipo mixto"),"Equipo mixto",team)),
+                       levels = c("Equipo femenino","Equipo masculino","Equipo mixto",
+                                  "Un solo hombre","Una sola mujer")),
+         status = factor(ifelse(status %in% c("acquired", "Acquired"), "Acquired", status),
+                         levels = c("Acquired","Closed","Operating")),
+         clasf_unicorn = factor(ifelse(clasf_unicorn %in% c("Was acquired","Was Acquired"), "Was Acquired", clasf_unicorn),
+                                levels = c("IPO","Rest of Companies","Soonicorn","Unicorn","Was Acquired")),
+         # Calculate new variables based on existing ones. For example, get median funding by company
+         median_funding = median(funding_usd, na.rm= T),
+         total_investors = sum(n_investors),
+         funding_rounds = n(),
+         foreign_funding_all = if_else(hq_inv== hq,"No","Yes"),
+         foreign_funding_all = factor(foreign_funding_all,levels = c("No","Yes")),
+         foreign_funding = ifelse(
+           hq != hq_inv &
+             !(hq_inv %in% c("Argentina", "Brazil", "Chile", 
+                             "Colombia", "Ecuador", "Mexico", 
+                             "Peru", "Venezuela")),
+           "Yes",
+           "No"),
+         same_country_funding = ifelse(hq==hq_inv,"Yes","No"),
+         regional_funding = ifelse(hq %in% c("Argentina", "Brazil", "Chile", 
+                                             "Colombia", "Ecuador", "Mexico", 
+                                             "Peru", "Venezuela") &
+                                     hq_inv %in% c("Argentina", "Brazil", 
+                                                   "Chile", "Colombia", "Ecuador", 
+                                                   "Mexico", "Peru", "Venezuela"), "Yes", "No"),
+         # Here I'm manually correcting some data capture errors
+         first_funding_round = case_when(
+           company == "Brex" ~ as.Date("2019-04-16", format = "%Y-%m-%d"),
+           company == "Hackmetrix" ~ as.Date("2020-07-01", format = "%Y-%m-%d"),
+           company == "Hash (Financial Software)" ~ as.Date("2017-01-05", format = "%Y-%m-%d"),
+           company == "Inventa (B2B Marketplace)" ~ as.Date("2021-08-17", format = "%Y-%m-%d"),
+           company == "Kavak" ~ as.Date("2016-08-01", format = "%Y-%m-%d"),
+           company == "Nexu" ~ as.Date("2014-01-01", format = "%Y-%m-%d"),
+           company == "Solfacil" ~ as.Date("2018-01-01", format = "%Y-%m-%d"),
+           TRUE ~ min(funding_date)),
+         last_funding_round = case_when(
+           company == "Brex" ~ as.Date("2019-12-11", format = "%Y-%m-%d"),
+           company == "Hackmetrix" ~ as.Date("2021-11-28", format = "%Y-%m-%d"),
+           company == "Hash (Financial Software)" ~ as.Date("2021-10-20", format = "%Y-%m-%d"),
+           company == "Inventa (B2B Marketplace)" ~ as.Date("2022-01-23", format = "%Y-%m-%d"),
+           company == "Kavak" ~ as.Date("2022-09-20", format = "%Y-%m-%d"),
+           company == "Nexu" ~ as.Date("2022-01-26", format = "%Y-%m-%d"),
+           company == "Solfacil" ~ as.Date("2022-09-22", format = "%Y-%m-%d"),
+           TRUE ~ max(funding_date)),
+         months_to_first_round = as.numeric(round(difftime(first_funding_round,founding_year, units = "days"))/30, digits =1),
+         months_between_first_and_last_round = as.numeric(round(difftime(last_funding_round,
+                                                                         first_funding_round, units = "days"))/30, digits=1),
+         months_between_rounds = c(NA, diff(as.numeric(difftime(funding_date, lag(funding_date), units = "days"))/30)),
+         team = case_when(
+           team == "Equipo femenino" ~ "Co-Founder Team",
+           team == "Equipo masculino" ~ "Co-Founder Team",
+           team == "Equipo mixto" ~ "Co-Founder Team",
+           team == "Un solo hombre" ~ "Solo Founder",
+           team == "Una sola mujer" ~ "Solo Founder",
+           TRUE  ~ team),
+         team = factor(team,levels = c("Co-Founder Team","Solo Founder")),
+         avg_months_between_rounds = mean(months_between_rounds, na.rm = TRUE)) %>% 
+  # Filter out NAs and absurd variables, such as a company having 0 investors or negative total raised
+  filter(complete.cases(funding_usd,total_raised, n_investors, founding_year, employees, funding_date),
+         !grepl("Undisclosed - VC", deal_type),
+         n_investors >0,
+         total_raised >0,
+         as.numeric(format(founding_year, "%Y")) >= 2013) %>% 
+  # Company classification starts from this point.
+  # Companies classified as Unicorns or Soonicorns are considered to be those who have gotten a +20M USD Funding round
+  # I'm only considering companies that closed or were acquired from 2018 to beyond.
+  filter(clasf_unicorn%in% c("Unicorn","Soonicorn")|status%in% c("Closed","Acquired") 
+         &  as.numeric(format(end_date, "%Y")) >= 2018) %>% 
+  # Successful companies will be those with a Unicorn or Soonicorn status
+  # Not Successful companies will be those that were closed or acquired
+  mutate(success = ifelse(clasf_unicorn %in% c("Unicorn", "Soonicorn"), "Successful",
+                          ifelse(status%in% c("Closed","Acquired"),"Not successful",NA)),
+         success = ifelse(company %in% c("Auth0", "Checkars", "Cornershop","Daki"), "Successful", success),
+         success = factor(success,levels = c("Successful","Not successful"))) %>% 
+  dplyr::select(company,vertical, hq, hq_inv,success, founding_year,end_date,foreign_funding_all, same_country_funding,
+         median_funding, funding_usd, funding_date, deal_type,
+         regional_funding, employees, team, months_to_first_round,
+         months_between_first_and_last_round, avg_months_between_rounds, 
+         total_raised, funding_rounds, n_investors) 
+
+
+
+```
+#### This data was obtained via a LinkedIn Scrapper, let's clean and join both the investments data with the founder data
+```{r Scraper Data Manipulation, warning=FALSE, message=FALSE}
+raw_data_scraper <- sheet_data_scraper %>% 
+  # Rename Variables
+  rename(company = `Nombre de la compañía del mapeo`,
+         exp_years = "Años de Experiencia",
+         entrep_exp_years = "Años de experiencia como emprendedor",
+         age = "Edad Actual",
+         entrep_age= "Edad de emprendimiento",
+         n_entrep_founded = "Numero de emprendimientos Fundados",
+         hundred_employees = "Worked on a +100 Company",
+         status = "Status Unicorn (1=unicorn, 3=soonicorn, 0=other companies)",
+         foreign_exp = "Foreign exp",
+         cofounders = "No. de Cofounders",
+         founders = "# founders",
+         employments_before_entrep= "Empleos previos a emprender",
+         business = Business,
+         entrep = Entrepreneurship,
+         finance = Financial,
+         marketing = Marketing,
+         maths_eng = `Maths & Engineering`,
+         pmanag= `Project Management`,
+         research = Research,
+         sales = Sales,
+         soft = `Soft Skills`,
+         consulting_exp = Consulting_exp,
+         founder_exp = Founder_exp,
+         clevel_exp= cLevel_exp,
+         field_of_study = `Undergraduate field of study`,
+         exp_years_categ = `Categorización Años de experiencia`,
+         foreign_exp = "Foreign exp") %>% 
+  group_by(company) %>% 
+  dplyr::select(company,exp_years, exp_years_categ,cofounders,
+         entrep_exp_years,employments_before_entrep,
+         age,entrep_age,n_entrep_founded,hundred_employees,
+         business,entrep,finance,marketing,maths_eng,pmanag,
+         research,sales,soft,manager_exp,clevel_exp,engineering_exp,
+         sales_exp,finance_exp,human_capital_exp,consulting_exp,founder_exp, field_of_study, foreign_exp) %>%
+  # Mutate and create new variables by company
+  mutate(cofounders = dplyr::recode(cofounders,
+                             "2 Cofounders" = 2,
+                             "3 Cofounders" = 3,
+                             "4 Cofounders" = 4,
+                             "5 o más Cofounders" = 5,
+                             "Single founder" = 1),
+         exp_years = sum(exp_years),
+         entrep_exp_years=sum(entrep_exp_years),
+         employments_before_entrep = sum(employments_before_entrep),
+         age = median(age),
+         entrep_age = median(entrep_age),
+         across(n_entrep_founded:founder_exp,sum)) %>% 
+  filter(exp_years >= 0) %>% 
+  # Keep a unique observation for each company
+  distinct(company, .keep_all = T)
+
+# Join founder data with the investments their company received.
+joined_data_scraper <- left_join(raw_data_vc,raw_data_scraper, by = "company") %>% 
+  mutate(cofounders = as.character(cofounders),
+         cofounders = if_else(cofounders %in% c("4", "5"), "4+", cofounders)) %>% 
+  filter(!is.na(cofounders)) %>% 
+  group_by(cofounders) %>% 
+  mutate(team = case_when(
+    cofounders == 1 ~ "Solo Founder",
+    TRUE ~ "Co-Founder Team"))
+
+```
+
+For confidentiality reasons, I can't provide the complete data frame. However, I'm able to share a more condensed, high-level view of the data:
+<br>
+
+```{r Glimpse of companies dataframe, echo=FALSE}
+companies_glimpse <- raw_data_vc %>% 
+  ungroup() %>% 
+  dplyr::select(company, hq, total_raised, months_between_first_and_last_round, team) %>% 
+  drop_na() %>% 
+  sample_n(5)
+
+kable(companies_glimpse, caption = "<center> Figure 1. <br> Glimpse on Companies Data </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(5, width = "5em")
+
+```
+
+
+
+```{r Summary Table Data Frame, include=FALSE}
+summary_table <- raw_data_vc %>%
+  group_by(success) %>%
+  summarize(
+    median_months_to_first_round = median(months_to_first_round),
+    median_months_between_first_and_last_round = median(months_between_first_and_last_round),
+    median_funding_rounds = median(funding_rounds),
+    median_employees = median(employees),
+    median_num_investors = median(n_investors),
+    median_founding_year = year(median(founding_year)),
+    median_closing_year = year(median(end_date))) %>% 
+  mutate(across(c(median_months_to_first_round:median_closing_year),
+                ~ round(., 0))) %>% 
+  rename("Months to first round" = median_months_to_first_round,
+         "Months between first and last round" = median_months_between_first_and_last_round,
+         "Funding rounds" = median_funding_rounds,
+         "Employees" = median_employees,
+         "Investors" = median_num_investors,
+         "Founding Year"= median_founding_year,
+         "End Year" = median_closing_year) %>% 
+  pivot_longer(cols = -success,
+    names_to = "variable",
+    values_to = "value") %>%
+  pivot_wider(names_from = success,
+    values_from = value) %>% 
+  rename("Variable"= variable)
+```
+# Part 1: Understanding Key Differences
+First, let's take a look at the median values. Given the non-normal distribution of the data, I'm focusing on examining the median values for each pertinent variable in the processed dataset.
+<br> <br>
+```{r Summary Table: Median, echo=FALSE}
+kable(summary_table, caption = "<center> Figure 2. <br> Summary Table: Median Values </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(2, width = "5em")
+```
+<br>
+The table reveals some intriguing findings: <br> <br>
+- Successful companies typically **secure their initial funding round two months ahead of unsuccessful ones.** <br>
+- Successful companies **usually have two additional funding rounds compared to unsuccessful ones.** <br>
+- Unsuccessful companies **often struggle to expand their workforce beyond 50 employees.** <br>
+- The highest number of **closures among unsuccessful companies occurred in 2020**, likely **influenced by the pandemic and issues accessing funding.** <br>
+
+```{r Team Composition Data Manipulation, include=FALSE, warning=FALSE, message=FALSE}
+team_comp <- joined_data_scraper %>% 
+  group_by(success, team) %>% 
+  summarise(Number = n()) %>% 
+  ungroup() %>% 
+  group_by(success) %>% 
+  mutate(Percentage = round(Number / sum(Number) * 100, 1)) %>% 
+  dplyr::select(success, "Team Composition" = team, Number, "Percentage of Total" = Percentage) %>% 
+  arrange(success, desc(Number)) %>% 
+  rename(status = success,
+         team = `Team Composition`) %>% 
+  filter(complete.cases(team))
+
+```
+
+### Now let's plot some key differences
+```{r Team Composition Graph, dpi=100, fig.align='center', tidy=TRUE, fig.width=2100/300, fig.height= 1500/300, echo=FALSE, fig.cap="Figure 3. Team Composition Distribution"}
+ggplot(team_comp, aes(x = team, y = `Percentage of Total`, fill = status)) + 
+  geom_bar(stat = "identity", position = "dodge") +
+  ggtitle("Team Composition Distribution")+
+  labs(x = "", y = "", fill= "Company Status",
+       subtitle = "Percentage of total across company status")+
+  geom_text(aes(label = percent(round(`Percentage of Total`, 0),scale = 1)), size=4,
+            position = position_dodge(width = 0.9), 
+            vjust = 1.6, hjust=0.5, color ="white")+
+  theme_minimal()+
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%")) +
+  theme(plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5),
+        plot.subtitle = element_text(face="italic",
+                                     size = 9,
+                                     hjust = 0.5),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x =  element_text(size = 11),
+        axis.title.y =  element_text(size = 11))+
+  scale_fill_manual(values = c("#577085", "#252f38"))
+```
+<br> 
+- While we shouldn't equate correlation with causation, the graph does suggest an interesting pattern. Despite the fact that having co-founders doesn't assure success, among co-founder companies, only 17% failed. While **within solo founders, this percentage increases to 30% failed companies**
+<br> <br>
+```{r Industries Data Frame, warning=FALSE, message=FALSE, echo=FALSE}
+industries_success <- raw_data_vc %>% 
+  group_by(vertical, success) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = count/sum(count)*100,
+         vertical = case_when(
+           vertical == "E-Commerce and Marketplaces / On Demand or Delivery Platforms" ~ "E-Commerce",
+           vertical == "HealthTech & Wellness" ~ "HealthTech",
+           vertical == "AdTech / Media / Content Delivery / Social Media" ~ "AdTech / Media",
+           vertical == "Transportation / Mobility / Logistics" ~ "Logistics",
+           TRUE  ~ vertical)) %>% 
+  filter(count >3) %>%
+  group_by(vertical) %>%
+  top_n(3, percentage) %>%
+  filter(all(c("Successful", "Not successful") %in% success))
+```
+
+```{r Industries Plot ,fig.align='center', dpi= 100, fig.width=2100/300, fig.height= 1500/300, echo=FALSE, fig.cap= "Figure 4: Top Performing Industries"}
+ggplot(industries_success, aes(x = vertical, y = percentage, fill = rev(success))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  ggtitle("Top Performing Industries")+
+  labs(x = "", y = "", fill = "Company Status", subtitle = "Percentage of successful and not successful companies across industries") +
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%")) +
+  coord_flip()+
+  theme_minimal()+
+  geom_text(aes(label = percent(round(percentage, 0),scale = 1)), size=4,
+            position = position_dodge(width = 0.9), 
+            vjust = 0.5, hjust=1.5, color ="white")+
+  theme(plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5),
+        plot.subtitle = element_text(face="italic",
+                                     size = 9,
+                                     hjust = 0.5),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x =  element_text(size = 10),
+        axis.title.y =  element_text(size = 10))+
+  scale_fill_manual(values = c("#252f38", "#577085"),
+                    labels = rev(levels(factor(industries_success$success))))+
+  scale_x_discrete(limits = rev(c("E-Commerce",
+                              "Logistics",
+                              "FinTech",
+                              "HealthTech",
+                              "AdTech / Media")))+
+    guides(fill = guide_legend(reverse = TRUE))
+
+```
+<br> 
+- E-commerce stands out as the most successful industry, with **84% of companies in this sector achieving success.**
+<br>
+- Conversely, the AdTech/Media industry exhibits the highest failure rate, as **29% of companies within this sector have either shut down or been acquired.**
+<br> <br>
+
+```{r Funding Locations Data Manipulation, echo=FALSE}
+
+foreign_fund_success <- as.data.frame(table(raw_data_vc$foreign_funding_all[raw_data_vc$success == "Successful"])) %>% 
+  mutate(percent = round(Freq /sum(Freq)*100,1),
+         "Funding Type" = "Foreign Funding",
+         Status = "Successful") %>% 
+  arrange(desc(Freq)) %>% 
+  rename("Answer"= Var1,
+         "Total Companies"= Freq,
+         "Percentage of Total"= percent)
+
+foreign_fund_nosuccess <- as.data.frame(table(raw_data_vc$foreign_funding_all[raw_data_vc$success == "Not successful"])) %>% 
+  mutate(percent = round(Freq /sum(Freq)*100,1),
+         "Funding Type" = "Foreign Funding",
+         Status= "Not Successful") %>% 
+  arrange(desc(Freq)) %>% 
+  rename("Answer"= Var1,
+         "Total Companies"= Freq,
+         "Percentage of Total"= percent)
+
+same_country_fund_success <- as.data.frame(table(raw_data_vc$same_country_funding[raw_data_vc$success == "Successful"])) %>% 
+    mutate(percent = round(Freq /sum(Freq)*100,1),
+           "Funding Type" = "Same Country Funding",
+           Status= "Successful") %>% 
+    arrange(desc(Freq)) %>% 
+    rename("Answer"= Var1,
+           "Total Companies"= Freq,
+           "Percentage of Total"= percent)
+  
+  same_country_fund_nosuccess <- as.data.frame(table(raw_data_vc$same_country_funding[raw_data_vc$success == "Not successful"])) %>% 
+    mutate(percent = round(Freq /sum(Freq)*100,1),
+           "Funding Type" = "Same Country Funding",
+           Status= "Not Successful") %>% 
+    arrange(desc(Freq)) %>% 
+    rename("Answer"= Var1,
+           "Total Companies"= Freq,
+           "Percentage of Total"= percent)
+  
+  regional_fund_success <- as.data.frame(table(raw_data_vc$regional_funding[raw_data_vc$success == "Successful"])) %>% 
+  mutate(percent = round(Freq /sum(Freq)*100,1),
+         "Funding Type" = "Regional Funding",
+         Status= "Successful") %>% 
+  arrange(desc(Freq)) %>% 
+  rename("Answer"= Var1,
+         "Total Companies"= Freq,
+         "Percentage of Total"= percent)
+
+regional_fund_nosuccess <- as.data.frame(table(raw_data_vc$regional_funding[raw_data_vc$success == "Not successful"])) %>% 
+  mutate(percent = round(Freq /sum(Freq)*100,1),
+         "Funding Type" = "Regional Funding",
+         Status= "Not Successful") %>% 
+  arrange(desc(Freq)) %>% 
+  rename("Answer"= Var1,
+         "Total Companies"= Freq,
+         "Percentage of Total"= percent)
+
+funding_types <- bind_rows(foreign_fund_success,foreign_fund_nosuccess,
+                           same_country_fund_success,same_country_fund_nosuccess,
+                           regional_fund_success,regional_fund_nosuccess) %>% 
+  filter(Answer== "Yes")
+
+df_funding_long <- funding_types %>%
+  pivot_longer(cols = c("Percentage of Total"), names_to = "variable", values_to = "value") %>% 
+  rename(funding_type = "Funding Type")
+
+```
+
+```{r Funding Locations Plot, dpi=100, fig.align='center', fig.width=2100/300, fig.height= 1500/300, tidy=TRUE, echo=FALSE, fig.cap= "Figure 5. Funding Locations"}
+
+ggplot(df_funding_long, aes(x = fct_reorder(funding_type, value) , y = value, fill = Status))+
+  geom_col(position = "dodge")+
+  ggtitle("Funding Geography")+
+  labs(x= "", y= "", fill = "Company Status", subtitle = "Funding location across company status")+
+  theme_minimal()+
+  coord_flip()+
+  scale_y_continuous(limits = c(0, 75), breaks = seq(0, 75, 25), labels = function(x) paste0(x, "%")) +
+  geom_text(aes(label = percent(round(value, 0),scale = 1)), size=4,
+            position = position_dodge(width = 0.9), 
+            vjust = 0.5, hjust=1.5, color ="white")+
+  theme(plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5),
+        plot.subtitle = element_text(face="italic",
+                                     size = 9,
+                                     hjust = 0.5),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x =  element_text(size = 11),
+        axis.title.y =  element_text(size = 11))+
+  scale_fill_manual(values = c("#252f38", "#577085"))+
+  guides(fill = guide_legend(reverse = TRUE))
+```
+
+<br>
+Another noteworthy observation pertains to the geographical origin of funding that entrepreneurs secure. <br> <br>
+- Successful companies have **72% rate of getting a foreign funding round.** <br>
+- On the other hand, unsuccessful companies get much more funding from local funds, with **52% receiving funds within their same country** versus **28% for successful companies**
+<br> <br>
+
+```{r Beeswarm Entreprenurial Age,fig.align='center', dpi= 100, fig.width=2100/300, fig.height= 1500/300, echo=FALSE, fig.cap= "Figure 6. Distribution of first entrepreneurship", warning=FALSE, message=FALSE}
+set.seed(123)
+ggplot(joined_data_scraper, aes(x=team, y=entrep_age))+
+  ggtitle("Distribution of age of first entrepreneurship")+
+  geom_jitter(aes(fill= team, size = employees) ,shape = 21, width = 0.25)+
+  scale_size(range = c(3, 11)) +
+  scale_fill_manual(values = c("#252f38", "#577085"))+
+  theme_minimal()+
+  labs(x = "", y = "Age of first entrepreneurship", subtitle = "Comparison across teams")+
+  theme(plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5),
+        plot.subtitle = element_text(face="italic",
+                                     size = 9,
+                                     hjust = 0.5),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x =  element_text(size = 8),
+        axis.title.y =  element_text(size = 9))+
+  guides(fill= "none",
+         size = "none")
+```
+<br>
+- The graph displays the age distribution of their first venture for both teams.
+<br>
+- Solo founders tend to launch their first venture two years earlier than co-founder teams.
+<br>
+- The bubble size represents the number of employees for each age.
+<br>
+-It's observed that for both teams, the longer their venture has been operating, the more employees they manage.
+<br> <br>
+
+```{r Years of Entreprenurial Experience vs Funding Rounds, fig.align='center', dpi= 100, fig.width=2000/300, fig.height= 1500/300, echo=FALSE, fig.cap= "Figure 7. Correlation graph", warning=FALSE, message=FALSE}
+set.seed(123)
+ggplot(joined_data_scraper,aes(x = entrep_exp_years , y = funding_rounds,color=team))+
+  ggtitle("Years of Entreprenurial Experience vs. Number of Funding Rounds")+
+  geom_point(aes(color= team),position = position_jitter(width = 1.5, height = 1.5),size=3.8, shape = 19) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Years of Entrepreneurial Experience", y = "Funding Rounds", color = "Team Composition", subtitle = "Pearson Correlation and p-value") +
+  scale_y_continuous(limits = c(0,15), breaks = seq(0,15,5))+
+  stat_cor(aes(color= team),method = "pearson", label.x.npc = .80, label.y.npc = .99,size=3,show.legend = F)+
+  theme_minimal()+
+  theme(plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5),
+        plot.subtitle = element_text(face="italic",
+                                     size = 9,
+                                     hjust = 0.5),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x =  element_text(size = 11),
+        axis.title.y =  element_text(size = 11))+
+  guides(color = guide_legend(override.aes = list(linetype = "blank")))+
+  scale_color_manual(values = c("#252f38", "#577085"))
+
+```
+<br>
+- Both groups display a positive correlation: the more experience they have, the more investment rounds they secure.
+<br>
+- The correlation value for the team of solo founders is higher (0.33). This could suggest that solo founders with more experience may secure more investment rounds than co-founder teams with similar years of experience.
+<br>
+-The p-value is less than 0.05, indicating a significant correlation, unlikely to be caused by chance.
+<br> <br>
+
+```{r Skills lollipop, fig.align='center', dpi= 100, fig.width=2100/300, fig.height= 1500/300, echo=FALSE, fig.cap= "Figure 8. Skills Comparison"}
+set.seed(123)
+skills_df<- joined_data_scraper %>% 
+  ungroup() %>% 
+  group_by(team) %>% 
+  summarise(across(business:sales, ~ mean(. >= 1, na.rm = TRUE) * 100, .names = "{col}"))
+
+skills_long <- skills_df %>%
+  pivot_longer(cols = -team, names_to = "skill", values_to = "percentage")
+
+skills_wide <- skills_long %>%
+  pivot_wider(names_from = team, values_from = percentage) %>% 
+  arrange("Solo Founder") %>% 
+  mutate(skill = factor(skill,skill)) %>% 
+  rename(v1 = "Solo Founder",
+         v2="Co-Founder Team") %>% 
+  mutate(skill = case_when(
+    skill == "business" ~ "Business Operations",
+    skill == "entrep" ~ "Entrepreneurship",
+    skill == "finance" ~ "Finance",
+    skill == "marketing" ~ "Marketing",
+    skill == "maths_eng" ~ "Mathematics and Engineering",
+    skill == "pmanag" ~ "Product Management",
+    skill == "research" ~ "Research",
+    skill == "sales" ~ "Sales",
+    TRUE ~ as.character(skill))) %>%
+  filter(skill != "Entrepreneurship")
+  
+
+ggplot(skills_wide, aes(x= skill, y=v2))+
+  ggtitle("Skill Comparison Across Teams")+
+  labs(subtitle = "Percentage of individuals that have certain abilities")+
+  geom_segment(aes(x=skill ,xend=skill, y=v2, yend=v1), color="grey")+
+  geom_point(size=5, color="#252f38") +
+  geom_point(aes(y=v1), size=5, color="#577085") +
+  coord_flip() +
+  theme_minimal()+
+  scale_y_continuous(limits = c(0, 85), breaks = seq(0, 80, 20), labels = function(x) paste0(x, "%")) +
+    theme(plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5),
+        plot.subtitle = element_text(face="italic",
+                                     size = 9,
+                                     hjust = 0.5),
+          axis.title.x = element_blank(),
+          axis.text.x = element_text(size=10),
+          axis.title.y  = element_blank(),
+          axis.text.y = element_text(size = 10))
+
+
+```
+<br>
+- There's a 31% increase in individuals with product management skills in co-founder teams versus solo founders.
+<br>
+- Financial skills come second, with a difference of 23% in co-founder teams versus solo founders.
+<br>
+- Both groups excel in business operations, emphasizing the importance of managing ventures effectively, regardless of the number of founders.
+<br> <br>
+
+```{r Deal Data Manipulation, include=FALSE}
+deal_data_vc <- raw_data_deals %>%
+  dplyr::select(company, founding_year, funding_date, deal_type,success,funding_usd) 
+
+successful_deals <- deal_data_vc %>% 
+  filter(success== "Successful")
+
+notsuccessful_deals <- deal_data_vc %>% 
+  filter(success== "Not successful")
+
+seed_to_seriesa_analysis <- function(deals, status) {
+  deals %>% 
+    filter(deal_type %in% c("Seed", "Series A")) %>% 
+    filter(all(c("Seed", "Series A") %in% deal_type)) %>% 
+    group_by(company, deal_type) %>% 
+    mutate(funding_usd= sum(funding_usd)) %>% 
+    ungroup() %>% 
+    distinct(company, deal_type, .keep_all = T) %>% 
+    spread(deal_type, funding_usd) %>% 
+    fill(c("Seed","Series A"), .direction = "downup") %>% 
+    mutate(series_a_fund = lead(funding_date, default = NA),
+           months_seed_to_seriesa = as.numeric(round(difftime(series_a_fund, funding_date, units = "days"))) / 30,
+           funding_diff=  `Series A` - Seed) %>% 
+    distinct(company, .keep_all = T) %>% 
+    filter(months_seed_to_seriesa >= 1) %>% 
+    rename(seed_funding_date = funding_date) %>% 
+    dplyr::select(company, funding_diff, months_seed_to_seriesa, success, seed_funding_date, series_a_fund) %>% 
+    summarize(status = status,
+              round= "Seed to Series A",
+              median_months = median(months_seed_to_seriesa, na.rm = TRUE),
+              median_funding_diff = median(funding_diff),
+              n = n())
+}
+
+# Apply the function to successful and unsuccessful deals data
+seed_to_seriesa_success_summary <- seed_to_seriesa_analysis(successful_deals, "Successful")
+seed_to_seriesa_notsuccess_summary <- seed_to_seriesa_analysis(notsuccessful_deals, "Not Successful")
+
+# Combine the results
+seed_to_seriesa <- rbind(seed_to_seriesa_success_summary, seed_to_seriesa_notsuccess_summary)
+
+seriesa_to_seriesb_analysis <- function(deals, status) {
+  deals %>% 
+    filter(deal_type %in% c("Series A", "Series B")) %>% 
+    filter(all(c("Series A", "Series B") %in% deal_type)) %>% 
+    group_by(company, deal_type) %>% 
+    mutate(funding_usd= sum(funding_usd)) %>% 
+    ungroup() %>% 
+    distinct(company, deal_type, .keep_all = T) %>% 
+    spread(deal_type, funding_usd) %>% 
+    fill(c("Series A","Series B"), .direction = "downup") %>% 
+    mutate(series_b_fund = lead(funding_date, default = NA),
+           months_seriesa_to_seriesb = as.numeric(round(difftime(series_b_fund, funding_date, units = "days"))) / 30,
+           funding_diff=  `Series B` - `Series A`) %>% 
+    distinct(company, .keep_all = T) %>% 
+    filter(months_seriesa_to_seriesb >= 1) %>% 
+    rename(seriesa_funding_date = funding_date) %>% 
+    dplyr::select(company, funding_diff, months_seriesa_to_seriesb, success, seriesa_funding_date, series_b_fund) %>% 
+    summarize(status = status,
+              round= "Series A to Series B",
+              median_months = median(months_seriesa_to_seriesb, na.rm = TRUE),
+              median_funding_diff = median(funding_diff),
+              n = n())
+}
+
+# Apply the function to successful and unsuccessful deals data
+seriesa_to_seriesb_success_summary <- seriesa_to_seriesb_analysis(successful_deals, "Successful")
+seriesa_to_seriesb_notsuccess_summary <- seriesa_to_seriesb_analysis(notsuccessful_deals, "Not Successful")
+
+# Combine the results
+seriesa_to_seriesb <- rbind(seriesa_to_seriesb_success_summary, seriesa_to_seriesb_notsuccess_summary)
+
+seriesb_to_seriesc_analysis <- function(deals, status) {
+  deals %>% 
+    filter(deal_type %in% c("Series B", "Series C")) %>% 
+    filter(all(c("Series B", "Series C") %in% deal_type)) %>% 
+    group_by(company, deal_type) %>% 
+    mutate(funding_usd= sum(funding_usd)) %>% 
+    ungroup() %>% 
+    distinct(company, deal_type, .keep_all = T) %>% 
+    spread(deal_type, funding_usd) %>% 
+    fill(c("Series B","Series C"), .direction = "downup") %>% 
+    mutate(series_c_fund = lead(funding_date, default = NA),
+           months_seriesb_to_seriesc = as.numeric(round(difftime(series_c_fund, funding_date, units = "days"))) / 30,
+           funding_diff=  `Series C` - `Series B`) %>% 
+    distinct(company, .keep_all = T) %>% 
+    filter(months_seriesb_to_seriesc >= 1) %>% 
+    rename(seriesb_funding_date = funding_date) %>% 
+    dplyr::select(company, funding_diff, months_seriesb_to_seriesc, success, seriesb_funding_date, series_c_fund) %>% 
+    summarize(status = status,
+              round= "Series B to Series C",
+              median_months = median(months_seriesb_to_seriesc, na.rm = TRUE),
+              median_funding_diff = median(funding_diff),
+              n = n())
+}
+
+# Apply the function to successful and unsuccessful deals data
+seriesb_to_seriesc_success_summary <- seriesb_to_seriesc_analysis(successful_deals, "Successful")
+seriesb_to_seriesc_notsuccess_summary <- seriesb_to_seriesc_analysis(notsuccessful_deals, "Not Successful")
+
+# Combine the results
+seriesb_to_seriesc <- rbind(seriesb_to_seriesc_success_summary, seriesb_to_seriesc_notsuccess_summary)
+
+seriesc_to_seriesd_analysis <- function(deals, status) {
+  deals %>% 
+    filter(deal_type %in% c("Series C", "Series D")) %>% 
+    filter(all(c("Series C", "Series D") %in% deal_type)) %>% 
+    group_by(company, deal_type) %>% 
+    mutate(funding_usd= sum(funding_usd)) %>% 
+    ungroup() %>% 
+    distinct(company, deal_type, .keep_all = T) %>% 
+    spread(deal_type, funding_usd) %>% 
+    fill(c("Series C","Series D"), .direction = "downup") %>% 
+    mutate(series_d_fund = lead(funding_date, default = NA),
+           months_seriesc_to_seriesd = as.numeric(round(difftime(series_d_fund, funding_date, units = "days"))) / 30,
+           funding_diff=  `Series D` - `Series C`) %>% 
+    distinct(company, .keep_all = T) %>% 
+    filter(months_seriesc_to_seriesd >= 1) %>% 
+    rename(seriesc_funding_date = funding_date) %>% 
+    dplyr::select(company, funding_diff, months_seriesc_to_seriesd, success, seriesc_funding_date, series_d_fund) %>% 
+    summarize(status = status,
+              round= "Series C to Series D",
+              median_months = median(months_seriesc_to_seriesd, na.rm = TRUE),
+              median_funding_diff = median(funding_diff),
+              n = n())
+}
+
+# Apply the function to successful and unsuccessful deals data
+seriesc_to_seriesd <- seriesc_to_seriesd_analysis(successful_deals, "Successful")
+
+seriesd_to_seriese_analysis <- function(deals, status) {
+  deals %>% 
+    filter(deal_type %in% c("Series D", "Series E")) %>% 
+    filter(all(c("Series D", "Series E") %in% deal_type)) %>% 
+    group_by(company, deal_type) %>% 
+    mutate(funding_usd= sum(funding_usd)) %>% 
+    ungroup() %>% 
+    distinct(company, deal_type, .keep_all = T) %>% 
+    spread(deal_type, funding_usd) %>% 
+    fill(c("Series D","Series E"), .direction = "downup") %>% 
+    mutate(series_e_fund = lead(funding_date, default = NA),
+           months_seriesd_to_seriese = as.numeric(round(difftime(series_e_fund, funding_date, units = "days"))) / 30,
+           funding_diff=  `Series E` - `Series D`) %>% 
+    distinct(company, .keep_all = T) %>% 
+    filter(months_seriesd_to_seriese >= 1) %>% 
+    rename(seriesd_funding_date = funding_date) %>% 
+    dplyr::select(company, funding_diff, months_seriesd_to_seriese, success, seriesd_funding_date, series_e_fund) %>% 
+    summarize(status = status,
+              round= "Series D to Series E+",
+              median_months = median(months_seriesd_to_seriese, na.rm = TRUE),
+              median_funding_diff = median(funding_diff),
+              n = n())
+}
+
+# Apply the function to successful and unsuccessful deals data
+seriesd_to_seriese <- seriesd_to_seriese_analysis(successful_deals, "Successful")
+
+joined_deals <- bind_rows(seed_to_seriesa,seriesa_to_seriesb,seriesb_to_seriesc,
+                          seriesc_to_seriesd,seriesd_to_seriese)
+
+df_deals_long <- joined_deals %>%
+  pivot_longer(cols = c("median_months"), names_to = "variable", values_to = "value")
+
+```
+
+```{r Deals Graph, dpi=100, fig.align='center',fig.width=2100/300, fig.height= 1500/300, echo=FALSE, fig.cap= "Figure 9. Time it takes companies to move from one funding round to another"}
+ggplot(df_deals_long, aes(x = round, y = value, fill = status))+
+  geom_col(position = "dodge", width = 0.8)+
+  ggtitle("Timeframe of Investment Stage Progression")+
+  labs(x= "", y= "Months", fill = "Company Status", subtitle = "Median months to move from one investment to another")+
+  theme_minimal()+
+  coord_flip()+
+  geom_text(aes(label = round(value, 0)), size=3.5,
+            position = position_dodge(width = 0.8), 
+            vjust = 0.3, hjust=2, color = "white")+
+  scale_fill_manual(values = c("#252f38", "#577085"))+
+  scale_x_discrete(limits = c("Series D to Series E+",
+                              "Series C to Series D",
+                              "Series B to Series C",
+                              "Series A to Series B",
+                              "Seed to Series A"))+
+  theme(plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5),
+        plot.subtitle = element_text(face="italic",
+                                     size = 9,
+                                     hjust = 0.5),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x =  element_text(size = 11),
+        axis.title.y =  element_text(size = 11))+
+  guides(fill = guide_legend(reverse = TRUE))
+```
+<br>
+The timeframe a company takes to move forward to the next investment stages is another key element that investors consider. The graph shows the median duration a company typically takes to progress from an early to a later investment stage. A few interesting observations are:
+<br> <br>
+- Successful companies **usually secure a Series A investment within a year.** In contrast, **unsuccessful companies can take up to a year and a half.** <br>
+- The shift to a Series B is challenging for all companies, but **successful ones manage it in 13 months**, while **unsuccessful ones can take as long as 30 months — over twice as long.** <br>
+- This trend continues into the transition to **Series C**, where **unsuccessful companies require 27 months.** <br>
+- Unsuccessful companies generally **fail to reach a Series D or further rounds.** <br>
+- Successful companies **maintain a steady influx of investments, with an average interval of a year between rounds.**
+<br> 
+
+```{r Set Random Seed, echo=FALSE}
+set.seed(123)
+```
+
+# Part 2: Fitting a logistic regression model
+Now, based on the previous analysis. I'm developing a logistic regression model.<br>
+```{r Logistic Regression, warning=FALSE, message=FALSE}
+set.seed(123)
+# Select all numeric variables 
+numeric_companies <- raw_data_vc %>% 
+  # Mutate success as a number, where 1 = Success and 0 = Not Successful
+  # Mutate team as a number, where 1 = Co-Founder Team and 0 = Solo Founder
+  # Mutate foreign funding as a number, where 1 = Has received foreign funding and 0 = Has not received foreign funding
+  mutate(success= as.numeric(if_else(success == "Successful",1,0)),
+         team = as.numeric(if_else(team == "Co-Founder Team",1,0)),
+         foreign_funding_all = as.numeric(if_else(foreign_funding_all== "Yes",1,0))) %>% 
+  ungroup() %>% 
+  select_if(is.numeric)
+
+# Mutate variables as factors so the model captures the levels correctly
+numeric_companies$success <- as.factor(numeric_companies$success)
+numeric_companies$team <- as.factor(numeric_companies$team)
+numeric_companies$foreign_funding_all <- as.factor(numeric_companies$foreign_funding_all)
+
+# Split training and testing datasets respectively 
+datos_split = initial_split(numeric_companies, prop = 0.7,strata = success)
+datos_train = training(datos_split)
+datos_test  = testing(datos_split)
+
+# Fit the logistic regression model where the variable to predict is success of a company
+logit <- glm(success ~ ., data = datos_train %>% dplyr::select(c(-avg_months_between_rounds,
+                                                          -funding_usd,
+                                                          -median_funding)), family = "binomial")
+
+```
+
+* Variable to predict will be Success of a company.
+* 70% of the data will be assigned into training the model
+
+```{r Clean Logit Data Frame, include=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(123)
+cleaned_train <- datos_train %>% 
+  rename("Total Employees" = employees,
+    "Received Foreign Funding (1=Yes)" = foreign_funding_all,
+    "Team Composition (1= Co-Founder Team)"= team,
+    "Months to achieve first round" = months_to_first_round,
+    "Months between first and last round"= months_between_first_and_last_round,
+    "Total Raised"= total_raised,
+    "Total funding rounds"= funding_rounds,
+    "Total Investors"= n_investors,
+    company_success = success)
+
+logit_clean <- glm( company_success ~ ., data = cleaned_train %>% dplyr::select(c(-avg_months_between_rounds,
+                                                          -funding_usd,
+                                                          -median_funding)), family = "binomial")
+
+
+```
+
+* The results highlight statistical significance across three variables at a 95% confidence level.<br> 
+* The model's AIC Criteria is low, indicating its effectiveness.<br> 
+* While it would be ideal to observe statistical significance across all regressors, the focus of this analysis is more on the model's predictive capabilities and accuracy. Therefore, this aspect doesn't undermine the analysis. <br>
+
+<div style="display: flex; justify-content: center;">
+```{r Logit Model Output, results='asis', warning=FALSE, echo=FALSE, fig.cap= "Figure 7: Logistic Regression Model Output"}
+stargazer(logit_clean, 
+          title = "Logistic Regression Summary",
+          type = "html", 
+          digits = 2)
+```
+</div>
+
+```{r VIF Calculation, echo=FALSE, include=FALSE}
+set.seed(123)
+vif <- as.data.frame(vif(logit_clean)) %>% 
+  rename("VIF Value"= "vif(logit_clean)")
+```
+<br> <br>
+
+* The Variance Inflation Factor (VIF) for the regression is relatively low, particularly when we consider a benchmark of 5 as high. <br>
+* This suggests that there's no substantial multicollinearity among the variables. <br>
+```{r VIF Output, echo=FALSE, warning=FALSE}
+kable(vif,caption = "<center> VIF Values for each regressor </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(2, width = "5em")
+```
+<br> <br>
+
+```{r Predictions and Confusion Matrix on Testing DataSet, include=FALSE}
+set.seed(123)
+predictions_test <- predict(logit, datos_test, type = "response")
+binary_predictions_test <- ifelse(predictions_test >= 0.6, 1, 0)
+binary_predictions_test <- factor(binary_predictions_test, levels = c(0, 1))
+actual_values_test <- datos_test$success
+actual_values_test <- factor(actual_values_test, levels = c(0, 1))
+
+cm_test <- table(binary_predictions_test, actual_values_test)
+cm_test_df <- as.data.frame.matrix(cm_test)
+rownames(cm_test_df) <- c("Predicted Failure", "Predicted Success")
+colnames(cm_test_df) <- c("Actual Failure", "Actual Success")
+
+predictions_train <- predict(logit, datos_train, type = "response")
+binary_predictions_train <- ifelse(predictions_train >= 0.6, 1, 0)
+binary_predictions_train <- factor(binary_predictions_train, levels = c(0, 1))
+actual_values_train <- datos_train$success
+actual_values_train <- factor(actual_values_train, levels = c(0, 1))
+
+cm_train <- table(binary_predictions_train, actual_values_train)
+cm_train_df <- as.data.frame.matrix(cm_train)
+rownames(cm_train_df) <- c("Predicted Failure", "Predicted Success")
+colnames(cm_train_df) <- c("Actual Failure", "Actual Success")
+
+
+
+```
+
+### Confusion Matrices
+* Comparing the model's predictions on the training and testing datasets, there are minimal false positives and false negatives. <br> 
+* This indicates that the model is performing effectively on both datasets. <br>
+
+<div style="display: flex; justify-content: space-between;">
+```{r Confusion Matrix Output, results='asis', echo=FALSE}
+kable(cm_test_df, caption = "<center> Confusion Matrix for Testing Dataset </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(2, width = "5em")
+
+kable(cm_train_df, caption = "<center> Confusion Matrix for Training Dataset </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(2, width = "5em")
+```
+</div>
+<br> <br>
+```{r Model Performance Metrics Calculation, include=FALSE}
+set.seed(123)
+accuracy_test <- sum(diag(cm_test)) / sum(cm_test)
+precision_test <- cm_test[2,2] / sum(cm_test[,2])
+recall_test <- cm_test[2,2] / sum(cm_test[2,])
+f1_score_test <- 2 * precision_test * recall_test / (precision_test + recall_test)
+test_metrics <- data.frame(Accuracy = accuracy_test, 
+                           Precision = precision_test, 
+                           Recall = recall_test, 
+                           F1_Score = f1_score_test)
+
+accuracy_train <- sum(diag(cm_train)) / sum(cm_train)
+precision_train <- cm_train[2,2] / sum(cm_train[,2])
+recall_train <- cm_train[2,2] / sum(cm_train[2,])
+f1_score_train <- 2 * precision_train * recall_train / (precision_train + recall_train)
+train_metrics <- data.frame(Accuracy = accuracy_train, 
+                            Precision = precision_train, 
+                            Recall = recall_train, 
+                            F1_Score = f1_score_train)
+```
+
+### Model Performance Metrics
+* The accuracy level is notably high for both datasets, exceeding 90%, with a variance of no more than 1% between them. <br>
+* The model provides accurate predictions across both these datasets which should give a very high confidence on predictions made. <br>
+
+<div style="display: flex; justify-content: space-between;">
+```{r Model Performance Metrics Output, results='asis', echo=FALSE}
+
+kable(test_metrics, caption = "<center> Model performance metrics for testing dataset </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(2, width = "5em")
+
+kable(train_metrics, caption = "<center> Model performance metrics for training dataset </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(2, width = "5em")
+
+```
+</div>
+
+```{r ROC Curve Calculation, warning=FALSE, message=FALSE, echo=FALSE}
+set.seed(123)
+roc_curve_test<- roc(datos_test$success, predictions_test)
+roc_curve_train <- roc(datos_train$success, predictions_train)
+
+```
+
+<br> <br>
+```{r, include=FALSE}
+set.seed(123)
+plot1<-ggroc(roc_curve_test, aes=c("linetype", "color"),linetype = 1,size = 0.6,alpha=1)+
+  labs(x = "Specificity", y = "Sensitivity") + 
+  ggtitle("Testing Dataset")+
+  geom_abline(intercept = 1, slope = 1, color='grey',size = 0.5,linetype = "dashed")+
+  theme(panel.background = element_rect(fill = "white",
+                                        colour = "white",
+                                        linewidth = 0, linetype = "solid"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        legend.position = c(0.8, 0.15),
+        plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5))+
+  scale_y_continuous(expand = c(0.01, 0.001),breaks= seq(from = 0 , to = 1 ,by = 0.2))+
+  scale_x_reverse(expand = c(0.01, 0.001),breaks= seq(from = 0 , to = 1 ,by = 0.2),limits = c(1,-0.01),
+                  labels = c("1.0","0.8","0.6","0.4","0.2","0.0")) +
+  annotate("text", x = 0.5, y = 0.4, label = paste0("AUC = ", round(roc_curve_test$auc,4)),
+           color = "black", size = 4, nudge_x = -0.25, nudge_y = 0.25)
+
+plot2<- ggroc(roc_curve_train, aes=c("linetype", "color"),linetype = 1,size = 0.6,alpha=1)+
+  labs(x = "Specificity", y = "Sensitivity") + 
+  ggtitle("Training Dataset")+
+  geom_abline(intercept = 1, slope = 1, color='grey',size = 0.5,linetype = "dashed")+
+  theme(panel.background = element_rect(fill = "white",
+                                        colour = "white",
+                                        linewidth = 0, linetype = "solid"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        legend.position = c(0.8, 0.15),
+        plot.title = element_text(face="bold", 
+                                  size = 18, 
+                                  hjust=0.5))+
+  scale_y_continuous(expand = c(0.01, 0.001),breaks= seq(from = 0 , to = 1 ,by = 0.2))+
+  scale_x_reverse(expand = c(0.01, 0.001),breaks= seq(from = 0 , to = 1 ,by = 0.2),limits = c(1,-0.01),
+                  labels = c("1.0","0.8","0.6","0.4","0.2","0.0")) +
+  annotate("text", x = 0.5, y = 0.4, label = paste0("AUC = ", round(roc_curve_train$auc,4)),
+           color = "black", size = 4, nudge_x = -0.25, nudge_y = 0.25)
+```
+
+### Area under the curve.
+* To maximize the precision of predictions, I assessed the Area Under the Curve (AUC) for the model, in addition to conventional accuracy and F1 Score. <br>
+* The AUC values are impressively high, nearing 100%, and show negligible variation between the testing and training datasets. <br>
+* These results underscore the effectiveness of the logistic regression model, emphasizing its enhanced discrimination capability and predictive accuracy. <br> <br>
+```{r AUC Plots, echo=FALSE, fig.align='center', dpi=100}
+grid.arrange(plot1, plot2, nrow = 1)
+```
+
+
+```{r Company A predictions, include=FALSE}
+set.seed(123)
+company_a <- data.frame(
+  employees = 109,
+  foreign_funding_all = factor(1, levels = c(0,1)),
+  team = factor(1, levels = c(0,1)),
+  months_to_first_round = 12,
+  months_between_first_and_last_round = 16,
+  total_raised = 17310000,
+  funding_rounds = 3,
+  n_investors = 4) 
+
+company_a_predictions <- as.data.frame(percent(predict(logit, company_a, type = "response")), scale =1)
+colnames(company_a_predictions) <- c("Chance of Company A being successful")
+```
+
+```{r Company B predictions, include=FALSE}
+set.seed(123)
+company_b <- data.frame(
+  employees = 26,
+  foreign_funding_all = factor(1, levels = c(0,1)),
+  team = factor(0, levels = c(0,1)),
+  months_to_first_round = 24,
+  months_between_first_and_last_round = 36,
+  total_raised = 10000000,
+  funding_rounds = 2,
+  n_investors = 2) 
+
+company_b_predictions <- as.data.frame(percent(predict(logit, company_b, type = "response")), scale = 1)
+colnames(company_b_predictions) <- c("Chance of Company B being successful")
+```
+<br> <br>
+```{r Clean Company Prediction Data, include=FALSE, echo=FALSE}
+set.seed(123)
+company_a_clean <- company_a %>% 
+    rename(
+    "Total Employees" = employees,
+    "Received Foreign Funding (1=Yes)" = foreign_funding_all,
+    "Team Composition (1= Co-Founder Team)"= team,
+    "Months to achieve first round" = months_to_first_round,
+    "Months between first and last round"= months_between_first_and_last_round,
+    "Total Raised"= total_raised,
+    "Total funding rounds"= funding_rounds,
+    "Total Investors"= n_investors)
+
+company_b_clean <- company_b %>% 
+    rename(
+    "Total Employees" = employees,
+    "Received Foreign Funding (0= No)" = foreign_funding_all,
+    "Team Composition (0= Solo Founder)"= team,
+    "Months to achieve first round" = months_to_first_round,
+    "Months between first and last round"= months_between_first_and_last_round,
+    "Total Raised"= total_raised,
+    "Total funding rounds"= funding_rounds,
+    "Total Investors"= n_investors
+  )
+```
+
+### Predictions on real world data.
+
+The following data frames contain real data from two companies. <br>
+Due to confidentiality obligations, I won't disclose the names of these companies. However, this data is crucial for making predictions about their success.
+
+```{r, echo=FALSE, results='asis'}
+options(scipen = 999)
+kable(company_a_clean, caption = "<center> Company A Data </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(8, width = "5em")
+
+kable(company_b_clean, caption = "<center> Company B Data </center>", align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(8, width = "5em")
+```
+
+
+<br> <br>
+
+### Chance of being successful.
+
+As seen in the provided data, there are significant differences between the two companies:
+<br> <br>
+1. Company A has successfully expanded to over 50 employees, indicating consistent growth, while Company B hasn't yet reached this milestone.
+<br> <br>
+2. Both companies have attracted foreign investment.
+<br> <br>
+3. Company A was launched by a team of co-founders, whereas Company B was started by a solo entrepreneur. As previously noted, companies that end up closing or getting acquired are often headed by a single individual.
+<br> <br>
+4. It took Company B twice as long to secure their first round of funding, suggesting a slower initial impact in their industry.
+<br> <br>
+5. Company A has raised over 17M USD, compared to Company B 10M USD.
+<br> <br>
+6. Company A has completed one additional funding round compared to Company B.
+<br> <br>
+7. Company A has attracted twice the number of investors as Company B, which could indicate a compelling business proposition.
+
+
+## Based on this data, the probability of success for these companies is: 
+<br>
+
+<div style="display: flex; justify-content: space-between;">
+```{r Predictions Nice Output, results='asis', echo=FALSE}
+
+kable(company_a_predictions, align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(1, width = "5em")
+
+kable(company_b_predictions, align = "c") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE) %>% 
+  column_spec(1, width = "5em")
+```
+</div>
+
+<br> 
+As we can see, company A is closer to getting a 20+ million dollars funding round. While company B is close to being acquired or closed with just a 9% chance of being successful.
+
+### Final Thoughts:
+<br>
+In conclusion, the developed Logistic Regression model has proven to be a highly effective tool in assessing the performance and potential success of Latin American startups, as indicated by its impressive accuracy and AUC values. It has provided invaluable insights into the distinguishing factors between successful and unsuccessful companies, shedding light on the importance of factors like the timing of initial funding, the number of funding rounds, and the structure of the founding team.
+<br> <br>
+Moreover, the model's robust performance across both training and testing datasets underlines its reliability in real-world applications. The ability to accurately predict company success based on specific variables is of significant value to both investors and entrepreneurs. This model can help companies identify areas where they are underperforming and guide them to implement strategic changes to drive growth and success.
+
+### Limitations:
+<br>
+While the model has demonstrated robust performance, it does have some limitations. 
+<br> <br>
+One of the primary constraints is that the model relies heavily on the structure of the founding team, particularly whether the company has a solo founder or a team of co-founders. This may lead to some bias in the model's predictions, as it places significant weight on this variable, potentially overlooking other critical factors.
+<br> <br>
+Furthermore, the model is designed to analyze a specific set of variables, which may not encompass all factors that could influence a company's success. Business outcomes can be influenced by a myriad of external factors, such as changes in market trends, economic fluctuations, and regulatory changes, which the model may not account for.
+<br> <br>
+It is important to note that the model is based on historical data, which means its predictions are inherently rooted in past trends. While these trends can often provide a reliable guide, they do not guarantee future outcomes, as the business landscape is continually evolving.
+<br> <br>
+Therefore, while the model provides valuable insights, it should not be the sole tool used in decision-making. It's essential to use these predictions alongside other business analysis tools, expert opinion, and consideration of broader market and industry trends to make well-rounded decisions.
