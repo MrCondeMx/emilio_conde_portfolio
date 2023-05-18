@@ -1,6 +1,6 @@
 # Emilio Conde Data Analytics Portfolio
 
-# [Predicting Startups Success](Founder-Analysis)
+# [Predicting Startups Success](https://github.com/MrCondeMx/emilio_portfolio/tree/main/Founder-Analysis)
 *Note: The output is in an HTML file. For accurate visualization, please download the file.*
 
 This project examines the key differences between businesses started by one person and those started by a team of co-founders. The goal is to figure out what makes a company successful and what might cause it to close or face acquisition. 
@@ -24,7 +24,7 @@ This project examines the key differences between businesses started by one pers
 ![](Founder-Analysis/Images/predictions.png)
 
 
-# [LinkedIn Company Demographics Scrapper](LinkedIn-Company-Scraper)
+# [LinkedIn Company Demographics Scrapper]([LinkedIn-Company-Scraper](https://github.com/MrCondeMx/emilio_portfolio/tree/main/LinkedIn-Company-Scraper))
 
 This project significantly enhanced the efficiency of data scraping from company profiles, providing tangible benefits to Endeavor Mexico.
 
