@@ -1,4 +1,4 @@
-# Emilio Conde Portfolio
+# Emilio Conde Data Analytics Portfolio
 
 # [Project 1: Predicting Startups Success](Founder-Analysis)
 *Note: The output is in an HTML file. For accurate visualization, please download the file.*
@@ -25,5 +25,11 @@ This project examines the key differences between businesses started by one pers
 
 
 # Project 2: LinkedIn Company Demographics Scrapper
+
+This project significantly enhanced the efficiency of data scraping from company profiles, providing tangible benefits to Endeavor Mexico.
+
+* The code is fully prepared for use and deployment across different computers. *Note for first-time Selenium users: Please ensure to install necessary libraries to prevent any errors.*
+* Added value: The scraper retrieves comprehensive employee demographic information, including locations, majors, skills, and occupations.
+* Executing all the provided code will yield a clean, ready-to-analyze data frame for any required analysis.
 
 # Project 3: Multidimensional Poverty in Mexico
