@@ -1,6 +1,6 @@
 # Emilio Conde Portfolio
 
-# Project 1: Predicting Startups Success
+# [Project 1: Predicting Startups Success](Founder-Analysis)
 
 This project examines the key differences between businesses started by one person and those started by a team of co-founders. The goal is to figure out what makes a company successful and what might cause it to close or face acquisition. 
 
