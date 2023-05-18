@@ -24,12 +24,19 @@ This project examines the key differences between businesses started by one pers
 ![](Founder-Analysis/Images/predictions.png)
 
 
-# Project 2: LinkedIn Company Demographics Scrapper
+# [Project 2: LinkedIn Company Demographics Scrapper](LinkedIn-Company-Scraper)
 
 This project significantly enhanced the efficiency of data scraping from company profiles, providing tangible benefits to Endeavor Mexico.
 
 * The code is fully prepared for use and deployment across different computers. *Note for first-time Selenium users: Please ensure to install necessary libraries to prevent any errors.*
+* Code only needs a list with the URLs to retrieve in a .csv format.
 * Added value: The scraper retrieves comprehensive employee demographic information, including locations, majors, skills, and occupations.
 * Executing all the provided code will yield a clean, ready-to-analyze data frame for any required analysis.
+
+### Top majors for a company:
+![](LinkedIn-Company-Scraper/Images/Majors.jpg)
+
+### Data Frame output:
+![](LinkedIn-Company-Scraper/Images/tableoutput.png)
 
 # Project 3: Multidimensional Poverty in Mexico
