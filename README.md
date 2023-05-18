@@ -24,7 +24,7 @@ This project examines the key differences between businesses started by one pers
 ![](Founder-Analysis/Images/predictions.png)
 
 
-# [LinkedIn Company Demographics Scrapper]([LinkedIn-Company-Scraper](https://github.com/MrCondeMx/emilio_portfolio/tree/main/LinkedIn-Company-Scraper))
+# [LinkedIn Company Demographics Scrapper](https://github.com/MrCondeMx/emilio_portfolio/tree/main/LinkedIn-Company-Scraper)
 
 This project significantly enhanced the efficiency of data scraping from company profiles, providing tangible benefits to Endeavor Mexico.
 
