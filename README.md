@@ -39,4 +39,8 @@ This project significantly enhanced the efficiency of data scraping from company
 ### Data Frame output:
 ![](LinkedIn-Company-Scraper/Images/tableoutput.png)
 
-# Multidimensional Poverty in Mexico
+# [Sports Analytics](https://github.com/MrCondeMx/emilio_portfolio/tree/main/Sports_Analytics)
+Here you can find my sports related projects. I love sports and I love combining my passion for data with my main hobby
+### Luka Doncic 60 point game shot chart:
+* Luka had a record-breaking game on december 27, 2022. What was his shot selection and shot making during that game? 
+![](Sports Analytics/Images)
