@@ -1,0 +1,115 @@
+-- SQL Queries
+
+-- Team Wins
+WITH ranked_teams AS (-- Create temporary table 'ranked_teams'
+    SELECT SUBSTR('20' || CAST (season AS TEXT), 1, 4) || '-' || SUBSTR('20' || CAST (season AS TEXT), 5) AS season,-- Convert format of season for further convenience
+           team,
+           COUNT( * ) AS wins,
+           RANK() OVER (PARTITION BY season ORDER BY COUNT( * ) DESC) AS rank-- PARTITION so the ranking is restarted every season
+      /* ORDER so the team with the most wins actually gets ranked #1 */FROM (
+               SELECT season,
+                      home_team AS team
+                 FROM game_info
+                WHERE result = 1
+               UNION ALL-- Combine results of both queries
+               SELECT season,
+                      away_team AS team
+                 FROM game_info
+                WHERE result = 0
+           )
+           AS subquery-- Name the result of the union as 'subquery'
+     GROUP BY season,
+              team
+)
+SELECT season,
+       team,
+       wins
+  FROM ranked_teams
+ WHERE rank = 1-- Filter only the team with most wins
+ ORDER BY season ASC;
+ 
+---- Box Score Queries
+WITH ranked_fg_percentage AS (
+SELECT '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) AS season_id,
+           player AS player_fg_p,
+           AVG(FGp) AS fg_p,
+           SUM(FG) AS total_fg_made,
+           RANK() OVER (PARTITION BY '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) ORDER BY AVG(FGp) DESC) AS rank
+      FROM player_stats
+     GROUP BY season_id,
+              player
+    HAVING total_fg_made >= 450
+), ranked_ppg AS (
+SELECT '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) AS season_id,
+           player AS player_ppg,
+           AVG(PTS) AS ppg,
+           COUNT( * ) AS games_played,
+           RANK() OVER (PARTITION BY '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) ORDER BY AVG(PTS) DESC) AS rank
+      FROM player_stats
+     GROUP BY season_id,
+              player
+    HAVING games_played >= 58
+), ranked_three_pointer AS (
+SELECT '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) AS season_id,
+           player AS player_three_p,
+           AVG("3Pp") AS three_pointer_percentage,
+           SUM("3P") AS total_threes_made,
+           RANK() OVER (PARTITION BY '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) ORDER BY AVG("3Pp") DESC) AS rank
+      FROM player_stats
+     GROUP BY season_id,
+              player
+    HAVING total_threes_made >= 82
+), ranked_assists AS (
+SELECT '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) AS season_id,
+           player AS player_assists,
+           AVG(AST) AS assists,
+           COUNT( * ) AS games_played,
+           RANK() OVER (PARTITION BY '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) ORDER BY AVG(AST) DESC) AS rank
+      FROM player_stats
+     GROUP BY season_id,
+              player
+    HAVING games_played >= 58
+), ranked_rebounds AS (
+SELECT '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) AS season_id,
+           player AS player_rebounds,
+           AVG(TRB) AS rebounds,
+           COUNT( * ) AS games_played,
+           RANK() OVER (PARTITION BY '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) ORDER BY AVG(TRB) DESC) AS rank
+      FROM player_stats
+     GROUP BY season_id,
+              player
+    HAVING games_played >= 58
+), ranked_blocks AS (
+SELECT '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) AS season_id,
+           player AS player_blocks,
+           AVG(BLK) AS blocks,
+           COUNT( * ) AS games_played,
+           RANK() OVER (PARTITION BY '20' || SUBSTR(CAST (game_id AS TEXT), 1, 2) || '-' || SUBSTR(CAST (game_id AS TEXT), 3, 2) ORDER BY AVG(BLK) DESC) AS rank
+      FROM player_stats
+     GROUP BY season_id,
+              player
+    HAVING games_played >= 58
+)
+SELECT season_id, player_fg_p AS player, 'FG Percentage' AS metric_name, fg_p AS metric_value, rank AS metric_rank, NULL AS ppg, NULL AS three_pointer_percentage, NULL AS assists, NULL AS rebounds, NULL AS blocks
+FROM ranked_fg_percentage
+WHERE rank <= 5
+UNION ALL
+SELECT season_id, player_ppg AS player, 'Points Per Game' AS metric_name, NULL AS metric_value, rank AS metric_rank, ppg, NULL AS three_pointer_percentage, NULL AS assists, NULL AS rebounds, NULL AS blocks
+FROM ranked_ppg
+WHERE rank <= 5
+UNION ALL
+SELECT season_id, player_three_p AS player, '3PT Percentage' AS metric_name, NULL AS metric_value, rank AS metric_rank, NULL AS ppg, three_pointer_percentage, NULL AS assists, NULL AS rebounds, NULL AS blocks
+FROM ranked_three_pointer
+WHERE rank <= 5
+UNION ALL
+SELECT season_id, player_assists AS player, 'Assists' AS metric_name, NULL AS metric_value, rank AS metric_rank, NULL AS ppg, NULL AS three_pointer_percentage, assists, NULL AS rebounds, NULL AS blocks
+FROM ranked_assists
+WHERE rank <= 5
+UNION ALL
+SELECT season_id, player_rebounds AS player, 'Rebounds' AS metric_name, NULL AS metric_value, rank AS metric_rank, NULL AS ppg, NULL AS three_pointer_percentage, NULL AS assists, rebounds, NULL AS blocks
+FROM ranked_rebounds
+WHERE rank <= 5
+UNION ALL
+SELECT season_id, player_blocks AS player, 'Blocks' AS metric_name, NULL AS metric_value, rank AS metric_rank, NULL AS ppg, NULL AS three_pointer_percentage, NULL AS assists, NULL AS rebounds, blocks
+FROM ranked_blocks
+WHERE rank <= 5;
