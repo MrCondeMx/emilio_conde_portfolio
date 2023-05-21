@@ -50,9 +50,10 @@ This project significantly enhanced the efficiency of data scraping from company
 Explore my portfolio of sports-related projects where I blend my passion for data analysis with my love for sports.
 
 ### Tracking NBA Season Leaders Over a Decade:
-* I've delved into the past decade's box score data using SQLite for a deep-dive analysis.
+* I've delved into the past decade's box score data using SQLite for a deep-dive analysis. 
 * The goal of this project was to do data manipulation using SQL with a minimal touch-up on R.
 * The resulting graph paints an exciting picture, highlighting the league's top performers across key stats like: 3PT%, PPG, Assists, and Rebounds.
+* [SQL Queries](https://github.com/MrCondeMx/emilio_conde_portfolio/blob/main/Sports%20Analytics/NBA/nba_season_analysis/SQL%20Queries) &  [Data Source](https://www.kaggle.com/datasets/lukedip/nba-boxscore-dataset)
 
 ![](Sports%20Analytics/Images/NBA_SEASON_LEADERS.jpeg)
 
